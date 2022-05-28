@@ -13,7 +13,8 @@
 #include <math.h>
 #include <cuda.h>
 #include <string.h>
-#include "./pgm.h"
+#include "common/pgm.h"
+
 
 const int degreeInc = 2;
 const int degreeBins = 180 / degreeInc;
@@ -72,8 +73,14 @@ void CPU_HoughTran (unsigned char *pic, int w, int h, int **acc)
 // The accummulator memory needs to be allocated by the host in global memory
 __global__ void GPU_HoughTran (unsigned char *pic, int w, int h, int *acc, float rMax, float rScale, float *d_Cos, float *d_Sin)
 {
-  //TODO calcular: int gloID = ?
-  int gloID = w * h + 1; //TODO
+  // int gloID = w * h + 1;
+  // int gloID = (blockIdx.z * gridDim.x * gridDim.y +
+  //              blockIdx.y * gridDim.x +
+  //              blockIdx.x) * blockDim.x * blockDim.y * blockDim.z +
+  //              threadIdx.z * blockDim.x * blockDim.y + 
+  //              threadIdx.y * blockDim.x + 
+  //              threadIdx.x;
+  int gloID = blockIdx.x * blockDim.x + threadIdx.x ;
   if (gloID > w * h) return;      // in case of extra threads in block
 
   int xCent = w / 2;
@@ -155,13 +162,24 @@ int main (int argc, char **argv)
   cudaMemcpy (d_in, h_in, sizeof (unsigned char) * w * h, cudaMemcpyHostToDevice);
   cudaMemset (d_hough, 0, sizeof (int) * degreeBins * rBins);
 
+  cudaEvent_t start, stop;
+  cudaEventCreate(&start);
+  cudaEventCreate(&stop);
+
+
   // execution configuration uses a 1-D grid of 1-D blocks, each made of 256 threads
   //1 thread por pixel
   int blockNum = ceil (w * h / 256);
+  cudaEventRecord(start);
   GPU_HoughTran <<< blockNum, 256 >>> (d_in, w, h, d_hough, rMax, rScale, d_Cos, d_Sin);
+  cudaEventRecord(stop);
 
   // get results from device
   cudaMemcpy (h_hough, d_hough, sizeof (int) * degreeBins * rBins, cudaMemcpyDeviceToHost);
+
+  cudaEventSynchronize(stop);
+  float milliseconds = 0;
+  cudaEventElapsedTime(&milliseconds, start, stop);
 
   // compare CPU and GPU results
   for (i = 0; i < degreeBins * rBins; i++)
@@ -170,8 +188,16 @@ int main (int argc, char **argv)
       printf ("Calculation mismatch at : %i %i %i\n", i, cpuht[i], h_hough[i]);
   }
   printf("Done!\n");
+  printf("Time: %f\n", milliseconds);
 
-  // TODO clean-up
+  // clean-up
+	cudaFree((void *) d_Cos);
+	cudaFree((void *) d_Sin);
+	cudaFree((void *) d_in);
+	cudaFree((void *) d_hough);
+	free(pcCos);
+	free(pcSin);
+	free(h_hough);
 
   return 0;
 }
