@@ -57,11 +57,6 @@ __constant__ float d_Cos[degreeBins];
 __constant__ float d_Sin[degreeBins];
 
 //*****************************************************************
-//TODO Kernel memoria compartida
-// __global__ void GPU_HoughTranShared(...)
-// {
-//   //TODO
-// }
 
 // GPU kernel. One thread per image pixel is spawned.
 // The accummulator memory needs to be allocated by the host in global memory
@@ -75,24 +70,30 @@ __global__ void GPU_HoughTran (unsigned char *pic, int w, int h, int *acc, float
   //              threadIdx.z * blockDim.x * blockDim.y + 
   //              threadIdx.y * blockDim.x + 
   //              threadIdx.x;
+  int i;
   int gloID = blockIdx.x * blockDim.x + threadIdx.x ;
   if (gloID > w * h) return;      // in case of extra threads in block
 
+  int locID = threadIdx.x;
   int xCent = w / 2;
   int yCent = h / 2;
 
-  //TODO explicar bien bien esta parte. Dibujar un rectangulo a modo de imagen sirve para visualizarlo mejor
+
   int xCoord = gloID % w - xCent;
   int yCoord = yCent - gloID / w;
 
   //TODO eventualmente usar memoria compartida para el acumulador
+  __shared__ int localAcc[degreeBins * rBins];
+
+  for (i = locID; i < degreeBins * rBins; i += blockDim.x)
+    localAcc[i] = 0;
+
+  __syncthreads();
 
   if (pic[gloID] > 0)
     {
       for (int tIdx = 0; tIdx < degreeBins; tIdx++)
         {
-          //TODO utilizar memoria constante para senos y cosenos
-          //float r = xCoord * cos(tIdx) + yCoord * sin(tIdx); //probar con esto para ver diferencia en tiempo
           float r = xCoord * d_Cos[tIdx] + yCoord * d_Sin[tIdx];
           int rIdx = (r + rMax) / rScale;
           //debemos usar atomic, pero que race condition hay si somos un thread por pixel? explique
@@ -103,6 +104,10 @@ __global__ void GPU_HoughTran (unsigned char *pic, int w, int h, int *acc, float
   //TODO eventualmente cuando se tenga memoria compartida, copiar del local al global
   //utilizar operaciones atomicas para seguridad
   //faltara sincronizar los hilos del bloque en algunos lados
+  __syncthreads();
+
+  for (i = locID; i < degreeBins * rBins; i += blockDim.x)
+    atomicAdd(acc + i, localAcc[i]);
 
 }
 
@@ -120,8 +125,8 @@ int main (int argc, char **argv)
   // float* d_Cos;
   // float* d_Sin;
 
-  cudaMalloc ((void **) &d_Cos, sizeof (float) * degreeBins);
-  cudaMalloc ((void **) &d_Sin, sizeof (float) * degreeBins);
+  // cudaMalloc ((void **) &d_Cos, sizeof (float) * degreeBins);
+  // cudaMalloc ((void **) &d_Sin, sizeof (float) * degreeBins);
 
   // CPU calculation
   CPU_HoughTran(inImg.pixels, w, h, &cpuht);
@@ -170,6 +175,8 @@ int main (int argc, char **argv)
   // GPU_HoughTran <<< blockNum, 256 >>> (d_in, w, h, d_hough, rMax, rScale, d_Cos, d_Sin);
   GPU_HoughTran <<< blockNum, 256 >>> (d_in, w, h, d_hough, rMax, rScale);
   cudaEventRecord(stop);
+
+  cudaDeviceSynchronize();
 
   // get results from device
   cudaMemcpy (h_hough, d_hough, sizeof (int) * degreeBins * rBins, cudaMemcpyDeviceToHost);
